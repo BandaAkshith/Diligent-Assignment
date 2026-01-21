@@ -1,32 +1,13 @@
-import os
+import importlib
 import uuid
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, cast
 
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 
-from pinecone import Pinecone, ServerlessSpec
-from llama_cpp import Llama
-
-load_dotenv()
-
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
-PINECONE_INDEX = os.getenv("PINECONE_INDEX", "assistant-knowledge")
-PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
-PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
-PINECONE_HOST = os.getenv("PINECONE_HOST", "")
-
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
-
-LLM_MODEL_PATH = os.getenv("LLM_MODEL_PATH", "")
-LLM_CTX = int(os.getenv("LLM_CTX", "4096"))
-LLM_THREADS = int(os.getenv("LLM_THREADS", "6"))
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "512"))
+import config
 
 app = FastAPI(title="Personal AI Assistant")
 
@@ -38,39 +19,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-embedder = SentenceTransformer(EMBEDDING_MODEL)
+embedder: Any = SentenceTransformer(config.EMBEDDING_MODEL)
 
-pc = Pinecone(api_key=PINECONE_API_KEY) if PINECONE_API_KEY else None
+pinecone_module = None
+try:
+    pinecone_module = importlib.import_module("pinecone")
+except Exception:
+    pinecone_module = None
+
+ollama_module = None
+try:
+    ollama_module = importlib.import_module("ollama")
+except Exception:
+    ollama_module = None
+
+pc = (
+    pinecone_module.Pinecone(api_key=config.PINECONE_API_KEY)
+    if pinecone_module and config.PINECONE_API_KEY
+    else None
+)
 index = None
 
-if pc:
-    if PINECONE_HOST:
-        index = pc.Index(host=PINECONE_HOST)
+if pc and pinecone_module:
+    if config.PINECONE_HOST:
+        index = pc.Index(host=config.PINECONE_HOST)
     else:
         existing = [idx["name"] for idx in pc.list_indexes()]
-        if PINECONE_INDEX not in existing:
+        if config.PINECONE_INDEX not in existing:
             pc.create_index(
-                name=PINECONE_INDEX,
-                dimension=EMBEDDING_DIM,
+                name=config.PINECONE_INDEX,
+                dimension=config.EMBEDDING_DIM,
                 metric="cosine",
-                spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
+                spec=pinecone_module.ServerlessSpec(
+                    cloud=config.PINECONE_CLOUD,
+                    region=config.PINECONE_REGION,
+                ),
             )
-        index = pc.Index(PINECONE_INDEX)
+        index = pc.Index(config.PINECONE_INDEX)
 
-llm = None
-if LLM_MODEL_PATH:
-    llm = Llama(
-        model_path=LLM_MODEL_PATH,
-        n_ctx=LLM_CTX,
-        n_threads=LLM_THREADS,
-        verbose=False,
-    )
+llm_ready = bool(ollama_module)
 
 
 class IngestRequest(BaseModel):
     text: str
     id: Optional[str] = None
-    metadata: Optional[dict] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class ChatRequest(BaseModel):
@@ -80,12 +73,12 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
-    sources: List[dict]
+    sources: List[Dict[str, Any]]
 
 
 def embed_text(text: str) -> List[float]:
     vector = embedder.encode([text], normalize_embeddings=True)[0]
-    return vector.tolist()
+    return cast(List[float], vector.tolist())
 
 
 def build_prompt(user_message: str, contexts: List[str]) -> str:
@@ -103,23 +96,32 @@ def build_prompt(user_message: str, contexts: List[str]) -> str:
 
 
 def generate_answer(prompt: str) -> str:
-    if not llm:
-        return "LLM_MODEL_PATH is not configured. Please set it in your environment."
-    output = llm(
-        prompt,
-        temperature=LLM_TEMPERATURE,
-        max_tokens=LLM_MAX_TOKENS,
-        stop=["User:", "System:"],
+    if not ollama_module:
+        return "Ollama is not available. Please install and run Ollama."
+    if not config.OLLAMA_MODEL:
+        return "OLLAMA_MODEL is not configured. Please set it in your environment."
+
+    response = ollama_module.chat(
+        model=config.OLLAMA_MODEL,
+        messages=[
+            {"role": "system", "content": "You are a helpful enterprise assistant."},
+            {"role": "user", "content": prompt},
+        ],
+        options={
+            "temperature": config.LLM_TEMPERATURE,
+            "num_ctx": config.LLM_CTX,
+            "num_predict": config.LLM_MAX_TOKENS,
+        },
     )
-    return output["choices"][0]["text"].strip()
+    return response["message"]["content"].strip()
 
 
 @app.get("/health")
-def health():
+def health() -> Dict[str, Any]:
     return {
         "status": "ok",
         "pinecone": bool(index),
-        "llm": bool(llm),
+        "llm": llm_ready,
     }
 
 
@@ -145,11 +147,11 @@ def chat(payload: ChatRequest):
     query_vector = embed_text(payload.message)
     results = index.query(vector=query_vector, top_k=5, include_metadata=True)
 
-    contexts = []
-    sources = []
+    contexts: List[str] = []
+    sources: List[Dict[str, Any]] = []
     for match in results.get("matches", []):
-        metadata = match.get("metadata", {}) or {}
-        text = metadata.get("text", "")
+        metadata = cast(Dict[str, Any], match.get("metadata", {}) or {})
+        text = cast(str, metadata.get("text", ""))
         if text:
             contexts.append(text)
             sources.append(

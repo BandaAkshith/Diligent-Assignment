@@ -1,7 +1,7 @@
-# Personal AI Assistant (Self-Hosted LLM + Pinecone)
+# Personal AI Assistant (Self-Hosted Ollama + Pinecone)
 
 A minimal end-to-end assistant with:
-- **Self-hosted LLM** via `llama.cpp`
+- **Self-hosted LLaMA-family LLM** via Ollama
 - **Vector database** via Pinecone
 - **Chat UI** (static HTML)
 
@@ -15,6 +15,7 @@ A minimal end-to-end assistant with:
 
 1. Copy environment variables:
    - Duplicate [.env.example](.env.example) to `.env` and fill in values.
+   - Set `OLLAMA_MODEL` to a local Ollama model (e.g., `llama3.1`).
 2. Install Python dependencies:
    - `pip install -r backend/requirements.txt`
 3. Start backend:
@@ -23,7 +24,7 @@ A minimal end-to-end assistant with:
    - Open [frontend/index.html](frontend/index.html) in your browser.
 
 ## Ingesting Data
-Use any REST client or curl:
+Use any REST client, curl, or the UI ingest box:
 
 ```bash
 curl -X POST http://localhost:8000/ingest \
@@ -32,5 +33,6 @@ curl -X POST http://localhost:8000/ingest \
 ```
 
 ## Notes
-- The assistant will answer from Pinecone context only. If nothing is found, it will say it doesn't know.
-- Ensure `LLM_MODEL_PATH` points to a local GGUF model.
+- The assistant answers strictly from Pinecone context; otherwise it says it doesn't know.
+- Pinecone can be used with API key + index name (or direct host).
+- Ensure Ollama is running locally.

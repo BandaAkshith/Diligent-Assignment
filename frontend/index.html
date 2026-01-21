@@ -87,6 +87,26 @@
         color: #9aa7c4;
         font-size: 12px;
       }
+      .ingest {
+        margin-top: 24px;
+        padding-top: 16px;
+        border-top: 1px solid #1c2433;
+      }
+      textarea {
+        width: 100%;
+        min-height: 90px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        border: 1px solid #23304a;
+        background: #0f1320;
+        color: #fff;
+        resize: vertical;
+      }
+      .small {
+        font-size: 12px;
+        color: #9aa7c4;
+        margin-top: 6px;
+      }
     </style>
   </head>
   <body>
@@ -99,6 +119,15 @@
           <input id="message" placeholder="Ask a question..." />
           <button id="send">Send</button>
         </div>
+        <div class="ingest">
+          <h3>Knowledge Ingest</h3>
+          <textarea id="ingestText" placeholder="Paste knowledge snippet..."></textarea>
+          <div class="input-row">
+            <input id="ingestMeta" placeholder='Metadata (JSON, optional) e.g. {"source":"policy"}' />
+            <button id="ingestBtn">Ingest</button>
+          </div>
+          <div id="ingestStatus" class="small"></div>
+        </div>
       </div>
     </div>
 
@@ -106,8 +135,12 @@
       const chat = document.getElementById("chat");
       const input = document.getElementById("message");
       const sendBtn = document.getElementById("send");
+      const ingestText = document.getElementById("ingestText");
+      const ingestMeta = document.getElementById("ingestMeta");
+      const ingestBtn = document.getElementById("ingestBtn");
+      const ingestStatus = document.getElementById("ingestStatus");
 
-      const API_BASE = "http://localhost:8000";
+      const API_BASE = "http://127.0.0.1:8000";
 
       function addBubble(text, role, sources = []) {
         const bubble = document.createElement("div");
@@ -153,6 +186,46 @@
           sendMessage();
         }
       });
+
+      async function ingestKnowledge() {
+        const text = ingestText.value.trim();
+        if (!text) return;
+        ingestBtn.disabled = true;
+        ingestStatus.textContent = "Ingesting...";
+
+        let metadata = undefined;
+        const rawMeta = ingestMeta.value.trim();
+        if (rawMeta) {
+          try {
+            metadata = JSON.parse(rawMeta);
+          } catch (err) {
+            ingestStatus.textContent = "Invalid JSON metadata.";
+            ingestBtn.disabled = false;
+            return;
+          }
+        }
+
+        try {
+          const res = await fetch(`${API_BASE}/ingest`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text, metadata }),
+          });
+          const data = await res.json();
+          if (data.id) {
+            ingestStatus.textContent = `Ingested with id: ${data.id}`;
+            ingestText.value = "";
+          } else {
+            ingestStatus.textContent = data.error || "Ingest failed.";
+          }
+        } catch (err) {
+          ingestStatus.textContent = "Failed to reach server.";
+        } finally {
+          ingestBtn.disabled = false;
+        }
+      }
+
+      ingestBtn.addEventListener("click", ingestKnowledge);
     </script>
   </body>
 </html>
